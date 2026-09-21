@@ -2,19 +2,18 @@ name: Daily NJ Business Agent
 
 on:
   schedule:
-    # Runs at 11:00 UTC (7:00 AM EST) every single day
     - cron: '0 11 * * *'
-  workflow_dispatch: # Allows manual trigger anytime
+  workflow_dispatch:
 
 jobs:
   run-nj-biz-agent:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -26,4 +25,5 @@ jobs:
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
         run: python agent_nj_biz.py
