@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -9,14 +10,10 @@ from bs4 import BeautifulSoup
 # --- CONFIGURATION ---
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_APP_PASSWORD")
+SCRAPER_KEY = os.getenv("SCRAPERAPI_KEY")
 RECIPIENT_EMAIL = "dcbartolo@gmail.com"
 
-# BizBuySell URL filtered specifically for New Jersey businesses
 BIZBUYSELL_NJ_URL = "https://www.bizbuysell.com/new-jersey-businesses-for-sale/"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
 
 def clean_currency(value_str):
     """Converts '$350,000' or 'N/A' into an integer."""
@@ -26,72 +23,79 @@ def clean_currency(value_str):
     return int(cleaned) if cleaned else 0
 
 def fetch_and_grade_nj_businesses():
-    response = requests.get(BIZBUYSELL_NJ_URL, headers=HEADERS)
+    # Use ScraperAPI to bypass Cloudflare & datacenter IP blocks (HTTP 403)
+    scraper_url = "http://api.scraperapi.com"
+    params = {
+        "api_key": SCRAPER_KEY,
+        "url": BIZBUYSELL_NJ_URL
+    }
+    
+    print("Fetching BizBuySell via ScraperAPI...")
+    response = requests.get(scraper_url, params=params)
+    print(f"BizBuySell Status Code: {response.status_code}")
+    
     if response.status_code != 200:
-        print(f"Failed to fetch page, status code: {response.status_code}")
-        return []
+        print(f"Error: Server returned HTTP status {response.status_code}")
+        sys.exit(1)
 
     soup = BeautifulSoup(response.text, "html.parser")
-    listings = soup.find_all("div", class_="listing-container")  # BizBuySell listing container
+    listings = soup.select("div.listing-container, div.bbs-listing, div.diamond")
     
+    if not listings:
+        print("Warning: No listing containers found on page. Checking fallback title elements...")
+        listings = soup.find_all("a", class_="title")
+        
+    print(f"Parsed {len(listings)} listings from BizBuySell.")
     parsed_results = []
 
     for listing in listings:
-        # Title & URL
-        title_tag = listing.find("a", class_="title")
+        title_tag = listing.find("a", class_="title") if hasattr(listing, 'find') else None
         if not title_tag:
             continue
             
         title = title_tag.text.strip()
-        link = "https://www.bizbuysell.com" + title_tag["href"] if title_tag["href"].startswith("/") else title_tag["href"]
+        href = title_tag.get("href", "")
+        link = "https://www.bizbuysell.com" + href if href.startswith("/") else href
         
-        # Location (e.g., Middlesex County, NJ)
-        location_tag = listing.find("span", class_="location")
+        location_tag = listing.find("span", class_="location") if hasattr(listing, 'find') else None
         location = location_tag.text.strip() if location_tag else "New Jersey"
 
-        # Asking Price & Cash Flow
-        price_tag = listing.find("span", class_="price")
+        price_tag = listing.find("span", class_="price") if hasattr(listing, 'find') else None
         price_str = price_tag.text.strip() if price_tag else "$0"
         price = clean_currency(price_str)
 
-        cash_flow_tag = listing.find("span", class_="cash-flow")
+        cash_flow_tag = listing.find("span", class_="cash-flow") if hasattr(listing, 'find') else None
         cash_flow_str = cash_flow_tag.text.strip() if cash_flow_tag else "$0"
         cash_flow = clean_currency(cash_flow_str)
 
-        # Skip non-NJ or invalid listings
-        if cash_flow == 0:
-            continue
-
-        # Calculate Price-to-SDE Multiple
         multiple = round(price / cash_flow, 2) if cash_flow > 0 else 0
 
         # --- FINANCIAL GRADING ---
-        if cash_flow >= 500000 or (cash_flow >= 350000 and multiple > 0 and multiple <= 2.5):
+        if cash_flow >= 500000 or (cash_flow >= 350000 and 0 < multiple <= 2.5):
             grade = "🦄 UNICORN"
         elif cash_flow >= 350000 and multiple <= 3.8:
             grade = "✅ PASS"
         else:
-            grade = "❌ FAIL"
+            grade = "❌ FAIL ($350k Target Not Met)"
 
         parsed_results.append({
             "title": title,
             "location": location,
             "price": f"${price:,}" if price > 0 else "Undisclosed",
-            "cash_flow": f"${cash_flow:,}",
+            "cash_flow": f"${cash_flow:,}" if cash_flow > 0 else "Undisclosed / N/A",
             "raw_cash_flow": cash_flow,
             "multiple": f"{multiple}x" if multiple > 0 else "N/A",
             "grade": grade,
             "url": link
         })
 
-    # Sort so UNICORNs and PASS deals appear at the top
     parsed_results.sort(key=lambda x: x["raw_cash_flow"], reverse=True)
     return parsed_results
 
 def send_daily_email(listings):
     if not listings:
-        print("No business listings found matching criteria today.")
-        return
+        print("Error: No listings parsed to include in email.")
+        sys.exit(1)
 
     html_body = """
     <html>
@@ -102,13 +106,13 @@ def send_daily_email(listings):
     """
 
     for item in listings:
-        color = "green" if "PASS" in item["grade"] or "UNICORN" in item["grade"] else "red"
+        color = "#28a745" if "PASS" in item["grade"] or "UNICORN" in item["grade"] else "#dc3545"
         
         html_body += f"""
-        <div style="margin-bottom: 20px; padding: 10px; border-left: 5px solid {color}; background-color: #f9f9f9;">
+        <div style="margin-bottom: 20px; padding: 12px; border-left: 5px solid {color}; background-color: #f8f9fa;">
             <h3 style="margin-top: 0;">{item['grade']}: {item['title']}</h3>
             <p style="margin: 4px 0;"><b>Location:</b> {item['location']}</p>
-            <p style="margin: 4px 0;"><b>Annual Cash Flow (SDE):</b> <span style="color: green;"><b>{item['cash_flow']}</b></span></p>
+            <p style="margin: 4px 0;"><b>Annual Cash Flow (SDE):</b> <span style="color: #28a745;"><b>{item['cash_flow']}</b></span></p>
             <p style="margin: 4px 0;"><b>Asking Price:</b> {item['price']} | <b>SDE Multiple:</b> {item['multiple']}</p>
             <p style="margin: 6px 0;"><a href="{item['url']}" target="_blank" style="color: #0066cc;">View BizBuySell Listing &rarr;</a></p>
         </div>
@@ -129,8 +133,16 @@ def send_daily_email(listings):
         server.quit()
         print("Daily NJ Business report dispatched successfully!")
     except Exception as e:
-        print(f"Error sending email: {e}")
+        print(f"Error sending email via SMTP: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
+    if not GMAIL_USER or not GMAIL_PASS:
+        print("Error: GMAIL_USER or GMAIL_APP_PASSWORD secret missing.")
+        sys.exit(1)
+    if not SCRAPER_KEY:
+        print("Error: SCRAPERAPI_KEY secret missing.")
+        sys.exit(1)
+        
     data = fetch_and_grade_nj_businesses()
     send_daily_email(data)
