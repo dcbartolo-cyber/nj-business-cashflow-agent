@@ -23,33 +23,44 @@ def clean_currency(value_str):
     return int(cleaned) if cleaned else 0
 
 def fetch_and_grade_nj_businesses():
-    # Use ScraperAPI to bypass Cloudflare & datacenter IP blocks (HTTP 403)
+    # Pass US country code and JS rendering to solve Cloudflare anti-bot challenges
     scraper_url = "http://api.scraperapi.com"
     params = {
         "api_key": SCRAPER_KEY,
-        "url": BIZBUYSELL_NJ_URL
+        "url": BIZBUYSELL_NJ_URL,
+        "country_code": "us",
+        "render": "true"
     }
     
-    print("Fetching BizBuySell via ScraperAPI...")
-    response = requests.get(scraper_url, params=params)
-    print(f"BizBuySell Status Code: {response.status_code}")
-    
+    print("Fetching BizBuySell via ScraperAPI (US Proxy + JS Render)...")
+    try:
+        response = requests.get(scraper_url, params=params, timeout=60)
+        print(f"ScraperAPI HTTP Status Code: {response.status_code}")
+    except Exception as e:
+        print(f"Connection Error: {e}")
+        sys.exit(1)
+        
     if response.status_code != 200:
-        print(f"Error: Server returned HTTP status {response.status_code}")
+        print(f"Error: ScraperAPI returned HTTP status {response.status_code}")
+        print(f"Response Body Snippet: {response.text[:300]}")
         sys.exit(1)
 
     soup = BeautifulSoup(response.text, "html.parser")
-    listings = soup.select("div.listing-container, div.bbs-listing, div.diamond")
     
+    # Try multiple standard BizBuySell listing containers
+    listings = soup.select("div.listing-container, div.bbs-listing, div.diamond")
     if not listings:
-        print("Warning: No listing containers found on page. Checking fallback title elements...")
+        print("Notice: Standard containers not matched. Using fallback title selectors...")
         listings = soup.find_all("a", class_="title")
         
-    print(f"Parsed {len(listings)} listings from BizBuySell.")
+    print(f"Successfully extracted {len(listings)} listing elements from BizBuySell.")
     parsed_results = []
 
     for listing in listings:
         title_tag = listing.find("a", class_="title") if hasattr(listing, 'find') else None
+        if not title_tag and hasattr(listing, 'text'):
+            title_tag = listing  # Fallback if listing itself is the <a> tag
+            
         if not title_tag:
             continue
             
@@ -94,7 +105,7 @@ def fetch_and_grade_nj_businesses():
 
 def send_daily_email(listings):
     if not listings:
-        print("Error: No listings parsed to include in email.")
+        print("Error: No listings parsed to send in email.")
         sys.exit(1)
 
     html_body = """
@@ -137,6 +148,7 @@ def send_daily_email(listings):
         sys.exit(1)
 
 if __name__ == "__main__":
+    # Diagnostic Secret Checks
     if not GMAIL_USER or not GMAIL_PASS:
         print("Error: GMAIL_USER or GMAIL_APP_PASSWORD secret missing.")
         sys.exit(1)
