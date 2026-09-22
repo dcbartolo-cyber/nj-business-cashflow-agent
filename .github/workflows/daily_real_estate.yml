@@ -1,0 +1,29 @@
+name: Daily Real Estate Investment Agent
+
+on:
+  schedule:
+    # Runs at 11:30 UTC (7:30 AM EST) every single day
+    - cron: '30 11 * * *'
+  workflow_dispatch: # Allows manual run anytime
+
+jobs:
+  run-real-estate-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python Dependencies
+        run: |
+          pip install ddgs
+
+      - name: Execute Real Estate Agent
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python agent_real_estate.py
