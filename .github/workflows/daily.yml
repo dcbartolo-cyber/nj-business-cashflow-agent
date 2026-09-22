@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs at 11:00 UTC (7:00 AM EST) every single day
     - cron: '0 11 * * *'
-  workflow_dispatch: # Allows manual trigger anytime from Actions tab
+  workflow_dispatch: # Allows manual trigger anytime
 
 jobs:
   run-nj-biz-agent:
@@ -20,12 +20,10 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          pip install requests
+          pip install duckduckgo_search
 
       - name: Execute NJ Business Agent
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
-          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
         run: python agent_nj_biz.py
