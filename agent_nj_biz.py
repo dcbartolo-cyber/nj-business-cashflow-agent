@@ -19,14 +19,14 @@ def clean_currency(value_str):
     return int(cleaned) if cleaned else 0
 
 def extract_financials(snippet):
-    """Extracts asking price and cash flow/SDE from listing snippets."""
+    """Extracts asking price and cash flow/SDE/EBITDA from listing snippets."""
     price, cash_flow = 0, 0
     
     price_match = re.search(r"(?:Asking Price|Price):\s*\$([\d,]+)", snippet, re.IGNORECASE) or re.search(r"\$([\d,]+)\s*(?:Asking|Price)", snippet, re.IGNORECASE)
     if price_match:
         price = clean_currency(price_match.group(1))
 
-    cf_match = re.search(r"(?:Cash Flow|SDE|EBITDA):\s*\$([\d,]+)", snippet, re.IGNORECASE) or re.search(r"\$([\d,]+)\s*(?:Cash Flow|SDE)", snippet, re.IGNORECASE)
+    cf_match = re.search(r"(?:Cash Flow|SDE|EBITDA):\s*\$([\d,]+)", snippet, re.IGNORECASE) or re.search(r"\$([\d,]+)\s*(?:Cash Flow|SDE|EBITDA)", snippet, re.IGNORECASE)
     if cf_match:
         cash_flow = clean_currency(cf_match.group(1))
         
@@ -34,14 +34,25 @@ def extract_financials(snippet):
 
 def grade_business_deal(title, price, cash_flow, snippet):
     """
-    Flexible Multi-Factor M&A Scoring Engine.
-    Evaluates financial strength, valuation, deal terms, and operational quality.
+    Expanded Multi-Factor M&A Scoring Engine.
+    Evaluates:
+    1. Financial Strength & Valuation
+    2. Geographic Scope (NJ & NY Metro Area)
+    3. Owner Dependency & Transferability Risk
+    4. Revenue Quality & Concentration Signals
+    5. Deal Terms, Real Estate & CapEx Quality
     """
     score = 0
     reasons = []
     text_lower = (title + " " + snippet).lower()
 
-    # 1. Financial Performance
+    # 1. Geographic Verification (NJ & NY Metro Area)
+    geo_keywords = ["new jersey", "nj", "new york", "ny", "westchester", "rockland", "staten island", "long island", "orange county", "tri-state"]
+    if any(k in text_lower for k in geo_keywords):
+        score += 10
+        reasons.append("Target Region (NJ/NY Metro)")
+
+    # 2. Financial Performance (Base Target: $350k+ SDE)
     if cash_flow >= 500000:
         score += 40
         reasons.append("High SDE ($500k+)")
@@ -53,7 +64,7 @@ def grade_business_deal(title, price, cash_flow, snippet):
     else:
         reasons.append("SDE Undisclosed in Snippet")
 
-    # 2. Valuation Multiple (Price / Cash Flow)
+    # 3. Valuation Multiple (Price / Cash Flow)
     multiple = round(price / cash_flow, 2) if (cash_flow > 0 and price > 0) else 0
     if 0 < multiple <= 2.5:
         score += 30
@@ -63,9 +74,9 @@ def grade_business_deal(title, price, cash_flow, snippet):
         reasons.append(f"Standard Market Multiple ({multiple}x SDE)")
     elif multiple > 4.2:
         score -= 20
-        reasons.append(f"High Multiple ({multiple}x SDE)")
+        reasons.append(f"High Multiple Penalty ({multiple}x SDE)")
 
-    # 3. Deal Terms & Financing Signals
+    # 4. Deal Terms & Financing Signals
     if any(k in text_lower for k in ["seller financ", "owner financ", "seller will finance"]):
         score += 15
         reasons.append("Seller Financing Available")
@@ -78,21 +89,33 @@ def grade_business_deal(title, price, cash_flow, snippet):
         score += 20
         reasons.append("Real Estate Included")
 
-    # 4. Operational Quality & Stability Signals
-    if any(k in text_lower for k in ["absentee", "semi-absentee", "manager in place", "turnkey"]):
+    # 5. Owner Dependency & Operational Risk
+    if any(k in text_lower for k in ["absentee", "semi-absentee", "manager in place", "turnkey", "key personnel"]):
         score += 15
-        reasons.append("Management in Place / Semi-Absentee")
-
-    if any(k in text_lower for k in ["recurring", "contracted", "b2b", "high margin"]):
+        reasons.append("Turnkey / Low Owner Dependency")
+    if any(k in text_lower for k in ["training provided", "will train", "smooth transition", "seller will stay"]):
         score += 10
-        reasons.append("Recurring Revenue / High Margin")
+        reasons.append("Transition Support Provided")
 
-    # 5. Final Grade Assignment
-    if cash_flow >= 350000 and score >= 60:
+    # 6. Revenue Quality & Customer Concentration
+    if any(k in text_lower for k in ["recurring", "contracted", "b2b", "repeat clients", "loyal customer", "high margin"]):
+        score += 15
+        reasons.append("Recurring Revenue / High Margin")
+    if any(k in text_lower for k in ["no customer concentration", "diversified client", "broad customer base"]):
+        score += 10
+        reasons.append("Low Customer Concentration Risk")
+
+    # 7. CapEx, Equipment & Asset Quality
+    if any(k in text_lower for k in ["equipment included", "fleet included", "fully equipped", "vehicles included", "machinery"]):
+        score += 10
+        reasons.append("Equipment/Fleet Included (Lower CapEx)")
+
+    # 8. Final Grade Assignment
+    if cash_flow >= 350000 and score >= 75:
         grade = "🦄 UNICORN"
-    elif cash_flow >= 350000 and score >= 25:
+    elif cash_flow >= 350000 and score >= 35:
         grade = "✅ PASS"
-    elif cash_flow == 0 and score >= 25:
+    elif cash_flow == 0 and score >= 30:
         grade = "⚠️ POTENTIAL DEAL (Undisclosed Financials)"
     else:
         grade = "❌ FAIL"
@@ -100,10 +123,12 @@ def grade_business_deal(title, price, cash_flow, snippet):
     return grade, score, multiple, reasons
 
 def fetch_via_ddg():
-    # Broader queries to cast a wider net
     queries = [
         'site:bizbuysell.com "New Jersey" "Cash Flow"',
-        'site:bizbuysell.com "New Jersey" "business for sale"'
+        'site:bizbuysell.com "New York" "Cash Flow"',
+        'site:bizbuysell.com "New Jersey" "SDE"',
+        'site:bizbuysell.com "New York" "SDE"',
+        'site:bizbuysell.com "NY" "Cash Flow"'
     ]
     
     seen_urls = set()
@@ -115,7 +140,7 @@ def fetch_via_ddg():
         print(f"Querying DuckDuckGo for: {query}")
         try:
             search_results = list(ddgs.text(query, max_results=20))
-            print(f"  -> Found {len(search_results)} raw search hits.")
+            print(f"  -> Found {len(search_results)} search hits.")
             for item in search_results:
                 link = item.get("href", "")
                 if link and link not in seen_urls:
@@ -124,10 +149,10 @@ def fetch_via_ddg():
         except Exception as e:
             print(f"  -> Search Error on query '{query}': {e}")
 
-    print(f"\nTotal unique listings fetched: {len(raw_results)}")
+    print(f"\nTotal unique listings fetched across NY/NJ: {len(raw_results)}")
     
     if not raw_results:
-        print("Diagnostic: Search engine returned 0 total hits across queries.")
+        print("Diagnostic: Search engine returned 0 hits across all queries.")
         return []
 
     parsed_results = []
@@ -139,7 +164,7 @@ def fetch_via_ddg():
         price, cash_flow = extract_financials(snippet)
         grade, score, multiple, reasons = grade_business_deal(title, price, cash_flow, snippet)
 
-        print(f"Diagnostic Item: '{title[:40]}...' | Price: ${price:,} | Cash Flow: ${cash_flow:,} | Grade: {grade}")
+        print(f"Diagnostic Item: '{title[:40]}...' | Price: ${price:,} | Cash Flow: ${cash_flow:,} | Score: {score} | Grade: {grade}")
 
         parsed_results.append({
             "title": title.replace(" - BizBuySell", ""),
@@ -164,26 +189,26 @@ def send_daily_email(listings):
     html_body = """
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
-        <h2>Daily NJ Business Acquisition Digest</h2>
-        <p><b>Criteria:</b> NJ Location | $350,000+ Annual SDE Target | Multi-Factor M&A Scoring</p>
+        <h2>Daily NY/NJ Business Acquisition Digest</h2>
+        <p><b>Target Scope:</b> NJ & NY Metro Area | $350,000+ Annual SDE Target | Expanded M&A Criteria</p>
         <hr>
     """
 
     for item in listings:
         if "UNICORN" in item["grade"]:
-            color = "#6f42c1"
+            color = "#6f42c1" # Purple
         elif "PASS" in item["grade"]:
-            color = "#28a745"
+            color = "#28a745" # Green
         elif "POTENTIAL" in item["grade"]:
-            color = "#fd7e14"
+            color = "#fd7e14" # Orange
         else:
-            color = "#dc3545"
+            color = "#dc3545" # Red
         
         html_body += f"""
         <div style="margin-bottom: 20px; padding: 14px; border-left: 6px solid {color}; background-color: #f8f9fa;">
             <h3 style="margin-top: 0; color: {color};">{item['grade']}: {item['title']}</h3>
             <p style="margin: 4px 0;"><b>Annual Cash Flow (SDE):</b> <span style="color: #28a745;"><b>{item['cash_flow']}</b></span> | <b>Asking Price:</b> {item['price']} ({item['multiple']})</p>
-            <p style="margin: 4px 0;"><b>M&A Quality Score:</b> {item['score']} pts | <b>Key Drivers:</b> <i>{item['reasons']}</i></p>
+            <p style="margin: 4px 0;"><b>M&A Quality Score:</b> {item['score']} pts | <b>Key Signals:</b> <i>{item['reasons']}</i></p>
             <p style="margin: 8px 0 0 0;"><a href="{item['url']}" target="_blank" style="color: #0066cc; font-weight: bold;">View Listing &rarr;</a></p>
         </div>
         """
@@ -191,7 +216,7 @@ def send_daily_email(listings):
     html_body += "</body></html>"
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Daily NJ Business Acquisition Digest ($350k+ Target)"
+    msg["Subject"] = "Daily NY/NJ Business Acquisition Digest ($350k+ Target)"
     msg["From"] = GMAIL_USER
     msg["To"] = RECIPIENT_EMAIL
     msg.attach(MIMEText(html_body, "html"))
@@ -201,7 +226,7 @@ def send_daily_email(listings):
         server.login(GMAIL_USER, GMAIL_PASS)
         server.sendmail(GMAIL_USER, RECIPIENT_EMAIL, msg.as_string())
         server.quit()
-        print("Daily NJ Business report dispatched successfully via Gmail SMTP!")
+        print("Daily NY/NJ Business report dispatched successfully via Gmail SMTP!")
     except Exception as e:
         print(f"Error sending email via SMTP: {e}")
         sys.exit(1)
