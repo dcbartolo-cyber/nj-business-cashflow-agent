@@ -4,13 +4,12 @@ import sys
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 # --- CONFIGURATION ---
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_APP_PASSWORD")
-SCRAPER_KEY = os.getenv("SCRAPERAPI_KEY")
 RECIPIENT_EMAIL = "dcbartolo@gmail.com"
 
 BIZBUYSELL_NJ_URL = "https://www.bizbuysell.com/new-jersey-businesses-for-sale/"
@@ -23,34 +22,33 @@ def clean_currency(value_str):
     return int(cleaned) if cleaned else 0
 
 def fetch_and_grade_nj_businesses():
-    # Pass US country code and JS rendering to solve Cloudflare anti-bot challenges
-    scraper_url = "http://api.scraperapi.com"
-    params = {
-        "api_key": SCRAPER_KEY,
-        "url": BIZBUYSELL_NJ_URL,
-        "country_code": "us",
-        "render": "true"
-    }
-    
-    print("Fetching BizBuySell via ScraperAPI (US Proxy + JS Render)...")
+    print("Fetching BizBuySell using Chrome TLS impersonation...")
     try:
-        response = requests.get(scraper_url, params=params, timeout=60)
-        print(f"ScraperAPI HTTP Status Code: {response.status_code}")
+        # Impersonate real Chrome browser TLS fingerprint to bypass Cloudflare
+        response = requests.get(
+            BIZBUYSELL_NJ_URL,
+            impersonate="chrome",
+            headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.google.com/"
+            },
+            timeout=30
+        )
+        print(f"BizBuySell HTTP Status Code: {response.status_code}")
     except Exception as e:
         print(f"Connection Error: {e}")
         sys.exit(1)
         
     if response.status_code != 200:
-        print(f"Error: ScraperAPI returned HTTP status {response.status_code}")
-        print(f"Response Body Snippet: {response.text[:300]}")
+        print(f"Error: Server returned HTTP status {response.status_code}")
         sys.exit(1)
 
     soup = BeautifulSoup(response.text, "html.parser")
     
-    # Try multiple standard BizBuySell listing containers
+    # Match standard listing containers
     listings = soup.select("div.listing-container, div.bbs-listing, div.diamond")
     if not listings:
-        print("Notice: Standard containers not matched. Using fallback title selectors...")
+        print("Notice: Standard containers not found. Checking fallback title links...")
         listings = soup.find_all("a", class_="title")
         
     print(f"Successfully extracted {len(listings)} listing elements from BizBuySell.")
@@ -58,7 +56,7 @@ def fetch_and_grade_nj_businesses():
 
     for listing in listings:
         title_tag = listing.find("a", class_="title") if hasattr(listing, 'find') else None
-        if not title_tag and hasattr(listing, 'text'):
+        if not title_tag and hasattr(listing, 'text') and getattr(listing, 'name', '') == 'a':
             title_tag = listing  # Fallback if listing itself is the <a> tag
             
         if not title_tag:
@@ -148,12 +146,8 @@ def send_daily_email(listings):
         sys.exit(1)
 
 if __name__ == "__main__":
-    # Diagnostic Secret Checks
     if not GMAIL_USER or not GMAIL_PASS:
         print("Error: GMAIL_USER or GMAIL_APP_PASSWORD secret missing.")
-        sys.exit(1)
-    if not SCRAPER_KEY:
-        print("Error: SCRAPERAPI_KEY secret missing.")
         sys.exit(1)
         
     data = fetch_and_grade_nj_businesses()
