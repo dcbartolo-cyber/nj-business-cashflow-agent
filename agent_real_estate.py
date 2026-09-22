@@ -16,6 +16,13 @@ INTEREST_RATE = 0.06        # 6.0% Implied LMA Rate
 DOWN_PAYMENT_PCT = 0.20     # 20% Down Payment
 LOAN_TERM_YEARS = 30
 
+# Exclude historical / non-active deal statuses
+INACTIVE_KEYWORDS = [
+    "sold", "recently sold", "off market", "off-market", 
+    "pending", "under contract", "contingent", "sold on", 
+    "sold for", "no longer for sale", "closed"
+]
+
 def clean_currency(value_str):
     """Converts '$450,000' or 'N/A' into an integer."""
     if not value_str:
@@ -31,6 +38,14 @@ def calculate_monthly_mortgage(principal, annual_rate=0.06, years=30):
     num_payments = years * 12
     monthly_payment = principal * (monthly_rate * (1 + monthly_rate)**num_payments) / ((1 + monthly_rate)**num_payments - 1)
     return round(monthly_payment, 2)
+
+def is_active_listing(title, snippet):
+    """Filters out sold, pending, or off-market historical listings."""
+    text_lower = (title + " " + snippet).lower()
+    for kw in INACTIVE_KEYWORDS:
+        if kw in text_lower:
+            return False
+    return True
 
 def extract_property_details(snippet, title):
     """Extracts price, estimated rent/revenue, beds, baths, and location."""
@@ -120,18 +135,19 @@ def evaluate_investment_property(title, price, monthly_gross, snippet):
     return grade, score, net_monthly_cash_flow, coc_return, monthly_piti_debt, ", ".join(reasons)
 
 def fetch_top_real_estate():
+    # Strict "for sale" queries to exclude historical records
     queries = [
         # Charlotte & NC Metro
-        'site:zillow.com/homedetails "Charlotte NC" "duplex" OR "triplex" OR "multi family"',
-        'site:redfin.com "Lake Norman" "cash flow" OR "turnkey"',
+        'site:zillow.com/homedetails "Charlotte NC" "for sale" "duplex" OR "triplex" OR "multi family"',
+        'site:redfin.com "Lake Norman" "for sale" "cash flow" OR "turnkey"',
         # Sunbelt & Midwest Cash Flow Hubs (LTR & MTR)
-        'site:zillow.com/homedetails "Columbus OH" "duplex" OR "triplex"',
-        'site:zillow.com/homedetails "Huntsville AL" "multi family" OR "cash flow"',
-        'site:redfin.com "Houston TX" "Medical Center" "furnished" OR "condo"',
+        'site:zillow.com/homedetails "Columbus OH" "for sale" "duplex" OR "triplex"',
+        'site:zillow.com/homedetails "Huntsville AL" "for sale" "multi family" OR "cash flow"',
+        'site:redfin.com "Houston TX" "for sale" "Medical Center" "furnished" OR "condo"',
         # Top Vacation / STR Drive-To Markets
-        'site:zillow.com/homedetails "Poconos" "Cash Flow" OR "Rent"',
-        'site:redfin.com "Gulf Shores" OR "Panama City Beach" "cash flow"',
-        'site:realtor.com/realestateandhomes-detail "Lehigh Valley" "duplex" OR "triplex"'
+        'site:zillow.com/homedetails "Poconos" "for sale" "Cash Flow" OR "Rent"',
+        'site:redfin.com "Gulf Shores" OR "Panama City Beach" "for sale" "cash flow"',
+        'site:realtor.com/realestateandhomes-detail "Lehigh Valley" "for sale" "duplex" OR "triplex"'
     ]
     
     seen_urls = set()
@@ -144,13 +160,20 @@ def fetch_top_real_estate():
             results = list(ddgs.text(query, max_results=15))
             for item in results:
                 link = item.get("href", "")
+                title = item.get("title", "")
+                snippet = item.get("body", "")
+
+                # Check URL uniqueness AND verify property is currently active
                 if link and link not in seen_urls:
-                    seen_urls.add(link)
-                    raw_results.append(item)
+                    if is_active_listing(title, snippet):
+                        seen_urls.add(link)
+                        raw_results.append(item)
+                    else:
+                        print(f"  [Filtered Out Inactive/Sold]: {title[:50]}...")
         except Exception as e:
             print(f"Search Error on query '{query}': {e}")
 
-    print(f"\nTotal unique properties retrieved across all markets: {len(raw_results)}")
+    print(f"\nTotal ACTIVE properties retrieved across all markets: {len(raw_results)}")
 
     parsed_properties = []
     for item in raw_results:
@@ -180,13 +203,13 @@ def fetch_top_real_estate():
 
 def send_daily_email(properties):
     if not properties:
-        print("No property listings retrieved today.")
+        print("No active property listings retrieved today.")
         return
 
     html_body = """
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5;">
-        <h2>Daily Top Investment Real Estate Digest (Nationwide Markets)</h2>
+        <h2>Daily Top Investment Real Estate Digest (Active Listings Only)</h2>
         <p><b>Underwriting Model:</b> 6% Implied LMA Rate (20% Down, 30Yr Amort) | <b>Target:</b> $1,000+/mo Net Cash Flow</p>
         <hr>
     """
@@ -214,7 +237,7 @@ def send_daily_email(properties):
     html_body += "</body></html>"
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "Daily Investment Real Estate Digest ($1,000+/mo Target @ 6% LMA)"
+    msg["Subject"] = "Daily Active Real Estate Digest ($1,000+/mo Target @ 6% LMA)"
     msg["From"] = GMAIL_USER
     msg["To"] = RECIPIENT_EMAIL
     msg.attach(MIMEText(html_body, "html"))
