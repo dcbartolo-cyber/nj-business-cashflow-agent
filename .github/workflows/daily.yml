@@ -2,9 +2,8 @@ name: Daily NJ Business Agent
 
 on:
   schedule:
-    # Runs at 11:00 UTC (7:00 AM EST) every single day
     - cron: '0 11 * * *'
-  workflow_dispatch: # Allows manual trigger anytime
+  workflow_dispatch:
 
 jobs:
   run-nj-biz-agent:
@@ -20,7 +19,7 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          pip install duckduckgo_search
+          pip install ddgs
 
       - name: Execute NJ Business Agent
         env:
