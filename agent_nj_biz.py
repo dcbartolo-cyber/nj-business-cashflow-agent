@@ -4,7 +4,7 @@ import sys
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 # --- CONFIGURATION ---
 GMAIL_USER = os.getenv("GMAIL_USER")
@@ -100,19 +100,38 @@ def grade_business_deal(title, price, cash_flow, snippet):
     return grade, score, multiple, reasons
 
 def fetch_via_ddg():
-    query = 'site:bizbuysell.com/Business-Opportunity "New Jersey" "$350,000"'
-    print(f"Querying DuckDuckGo Search Engine for: {query}")
+    # Broader queries to cast a wider net
+    queries = [
+        'site:bizbuysell.com "New Jersey" "Cash Flow"',
+        'site:bizbuysell.com "New Jersey" "business for sale"'
+    ]
     
-    results = []
-    try:
-        ddgs = DDGS()
-        search_results = list(ddgs.text(query, max_results=15))
-        print(f"Retrieved {len(search_results)} search results from DuckDuckGo.")
-    except Exception as e:
-        print(f"DuckDuckGo Search Error: {e}")
-        sys.exit(1)
+    seen_urls = set()
+    raw_results = []
+    
+    ddgs = DDGS()
+    
+    for query in queries:
+        print(f"Querying DuckDuckGo for: {query}")
+        try:
+            search_results = list(ddgs.text(query, max_results=20))
+            print(f"  -> Found {len(search_results)} raw search hits.")
+            for item in search_results:
+                link = item.get("href", "")
+                if link and link not in seen_urls:
+                    seen_urls.add(link)
+                    raw_results.append(item)
+        except Exception as e:
+            print(f"  -> Search Error on query '{query}': {e}")
 
-    for item in search_results:
+    print(f"\nTotal unique listings fetched: {len(raw_results)}")
+    
+    if not raw_results:
+        print("Diagnostic: Search engine returned 0 total hits across queries.")
+        return []
+
+    parsed_results = []
+    for item in raw_results:
         title = item.get("title", "")
         link = item.get("href", "")
         snippet = item.get("body", "")
@@ -120,7 +139,9 @@ def fetch_via_ddg():
         price, cash_flow = extract_financials(snippet)
         grade, score, multiple, reasons = grade_business_deal(title, price, cash_flow, snippet)
 
-        results.append({
+        print(f"Diagnostic Item: '{title[:40]}...' | Price: ${price:,} | Cash Flow: ${cash_flow:,} | Grade: {grade}")
+
+        parsed_results.append({
             "title": title.replace(" - BizBuySell", ""),
             "price": f"${price:,}" if price > 0 else "Undisclosed",
             "cash_flow": f"${cash_flow:,}" if cash_flow > 0 else "Undisclosed",
@@ -132,12 +153,12 @@ def fetch_via_ddg():
             "url": link
         })
 
-    results.sort(key=lambda x: (x["raw_cash_flow"], x["score"]), reverse=True)
-    return results
+    parsed_results.sort(key=lambda x: (x["raw_cash_flow"], x["score"]), reverse=True)
+    return parsed_results
 
 def send_daily_email(listings):
     if not listings:
-        print("No matching listings retrieved today.")
+        print("No listings retrieved today to include in email.")
         return
 
     html_body = """
@@ -150,13 +171,13 @@ def send_daily_email(listings):
 
     for item in listings:
         if "UNICORN" in item["grade"]:
-            color = "#6f42c1" # Purple
+            color = "#6f42c1"
         elif "PASS" in item["grade"]:
-            color = "#28a745" # Green
+            color = "#28a745"
         elif "POTENTIAL" in item["grade"]:
-            color = "#fd7e14" # Orange
+            color = "#fd7e14"
         else:
-            color = "#dc3545" # Red
+            color = "#dc3545"
         
         html_body += f"""
         <div style="margin-bottom: 20px; padding: 14px; border-left: 6px solid {color}; background-color: #f8f9fa;">
