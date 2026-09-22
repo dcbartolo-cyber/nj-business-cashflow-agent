@@ -4,13 +4,11 @@ import sys
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import requests
+from duckduckgo_search import DDGS
 
 # --- CONFIGURATION ---
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_APP_PASSWORD")
-GOOGLE_API_KEY = os.getenv("GOOGLE_SEARCH_API_KEY")
-GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 RECIPIENT_EMAIL = "dcbartolo@gmail.com"
 
 def clean_currency(value_str):
@@ -21,16 +19,14 @@ def clean_currency(value_str):
     return int(cleaned) if cleaned else 0
 
 def extract_financials(snippet):
-    """Extracts asking price and cash flow from listing text/snippets."""
+    """Extracts asking price and cash flow/SDE from listing snippets."""
     price, cash_flow = 0, 0
     
-    # Extract Price
-    price_match = re.search(r"Asking Price:\s*\$([\d,]+)", snippet, re.IGNORECASE) or re.search(r"\$([\d,]+)\s*(?:Price|Asking)", snippet, re.IGNORECASE)
+    price_match = re.search(r"(?:Asking Price|Price):\s*\$([\d,]+)", snippet, re.IGNORECASE) or re.search(r"\$([\d,]+)\s*(?:Asking|Price)", snippet, re.IGNORECASE)
     if price_match:
         price = clean_currency(price_match.group(1))
 
-    # Extract Cash Flow / SDE
-    cf_match = re.search(r"Cash Flow:\s*\$([\d,]+)", snippet, re.IGNORECASE) or re.search(r"SDE:\s*\$([\d,]+)", snippet, re.IGNORECASE)
+    cf_match = re.search(r"(?:Cash Flow|SDE|EBITDA):\s*\$([\d,]+)", snippet, re.IGNORECASE) or re.search(r"\$([\d,]+)\s*(?:Cash Flow|SDE)", snippet, re.IGNORECASE)
     if cf_match:
         cash_flow = clean_currency(cf_match.group(1))
         
@@ -38,14 +34,14 @@ def extract_financials(snippet):
 
 def grade_business_deal(title, price, cash_flow, snippet):
     """
-    Flexible Multi-Criteria M&A Evaluation Engine.
-    Evaluates financial strength, valuation, deal structure, and operational quality.
+    Flexible Multi-Factor M&A Scoring Engine.
+    Evaluates financial strength, valuation, deal terms, and operational quality.
     """
     score = 0
     reasons = []
     text_lower = (title + " " + snippet).lower()
 
-    # 1. Financial Strength (Base Criterion)
+    # 1. Financial Performance
     if cash_flow >= 500000:
         score += 40
         reasons.append("High SDE ($500k+)")
@@ -82,7 +78,7 @@ def grade_business_deal(title, price, cash_flow, snippet):
         score += 20
         reasons.append("Real Estate Included")
 
-    # 4. Operational & Quality Signals
+    # 4. Operational Quality & Stability Signals
     if any(k in text_lower for k in ["absentee", "semi-absentee", "manager in place", "turnkey"]):
         score += 15
         reasons.append("Management in Place / Semi-Absentee")
@@ -92,9 +88,9 @@ def grade_business_deal(title, price, cash_flow, snippet):
         reasons.append("Recurring Revenue / High Margin")
 
     # 5. Final Grade Assignment
-    if cash_flow >= 350000 and score >= 65:
+    if cash_flow >= 350000 and score >= 60:
         grade = "🦄 UNICORN"
-    elif cash_flow >= 350000 and score >= 30:
+    elif cash_flow >= 350000 and score >= 25:
         grade = "✅ PASS"
     elif cash_flow == 0 and score >= 25:
         grade = "⚠️ POTENTIAL DEAL (Undisclosed Financials)"
@@ -103,29 +99,27 @@ def grade_business_deal(title, price, cash_flow, snippet):
 
     return grade, score, multiple, reasons
 
-def fetch_via_google_search():
-    query = 'site:bizbuysell.com/Business-Opportunity "New Jersey" "$350,000" OR "$400,000" OR "$500,000"'
-    url = f"https://www.googleapis.com/customsearch/v1?key={GOOGLE_API_KEY}&cx={GOOGLE_CSE_ID}&q={query}"
-    
-    print("Querying Google Custom Search API for NJ BizBuySell listings...")
-    res = requests.get(url)
-    
-    if res.status_code != 200:
-        print(f"Google API Error: {res.status_code} - {res.text}")
-        sys.exit(1)
-        
-    items = res.json().get("items", [])
-    print(f"Retrieved {len(items)} listings from Google Index.")
+def fetch_via_ddg():
+    query = 'site:bizbuysell.com/Business-Opportunity "New Jersey" "$350,000"'
+    print(f"Querying DuckDuckGo Search Engine for: {query}")
     
     results = []
-    for item in items:
+    try:
+        ddgs = DDGS()
+        search_results = list(ddgs.text(query, max_results=15))
+        print(f"Retrieved {len(search_results)} search results from DuckDuckGo.")
+    except Exception as e:
+        print(f"DuckDuckGo Search Error: {e}")
+        sys.exit(1)
+
+    for item in search_results:
         title = item.get("title", "")
-        link = item.get("link", "")
-        snippet = item.get("snippet", "")
-        
+        link = item.get("href", "")
+        snippet = item.get("body", "")
+
         price, cash_flow = extract_financials(snippet)
         grade, score, multiple, reasons = grade_business_deal(title, price, cash_flow, snippet)
-        
+
         results.append({
             "title": title.replace(" - BizBuySell", ""),
             "price": f"${price:,}" if price > 0 else "Undisclosed",
@@ -137,13 +131,13 @@ def fetch_via_google_search():
             "reasons": ", ".join(reasons),
             "url": link
         })
-        
+
     results.sort(key=lambda x: (x["raw_cash_flow"], x["score"]), reverse=True)
     return results
 
 def send_daily_email(listings):
     if not listings:
-        print("No listings found today.")
+        print("No matching listings retrieved today.")
         return
 
     html_body = """
@@ -192,9 +186,9 @@ def send_daily_email(listings):
         sys.exit(1)
 
 if __name__ == "__main__":
-    if not GMAIL_USER or not GMAIL_PASS or not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
-        print("Error: Missing environment variables/secrets.")
+    if not GMAIL_USER or not GMAIL_PASS:
+        print("Error: GMAIL_USER or GMAIL_APP_PASSWORD secret missing.")
         sys.exit(1)
         
-    data = fetch_via_google_search()
+    data = fetch_via_ddg()
     send_daily_email(data)
