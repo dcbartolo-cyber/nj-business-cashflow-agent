@@ -2,14 +2,15 @@ name: Daily NJ Business Agent
 
 on:
   schedule:
+    # Runs at 11:00 UTC (7:00 AM EST) every single day
     - cron: '0 11 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual trigger anytime from Actions tab
 
 jobs:
   run-nj-biz-agent:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -19,14 +20,12 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          pip install playwright beautifulsoup4
-
-      - name: Install Playwright Browsers & OS Dependencies
-        run: |
-          python -m playwright install chromium --with-deps
+          pip install requests
 
       - name: Execute NJ Business Agent
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
         run: python agent_nj_biz.py
