@@ -81,7 +81,7 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events."
 
 def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
-    """Uses Gemini Chat API with progressive backoff to generate 5 tailored weekend itineraries."""
+    """Uses Gemini Chat API with progressive backoff to generate 5 Saturday & 5 Sunday weather-aligned itineraries."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
@@ -95,12 +95,15 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
     - Existing Google Calendar Commitments:
     {calendar_events}
     
+    **WEATHER & DAY ALIGNMENT RULES (STRICT):**
+    - **Saturday Weather Alignment**: Evaluate Saturday's specific forecast ({weather}). If Saturday has rain, high precipitation (>5mm), cold temperatures (<50°F), or high winds, all 5 Saturday itineraries MUST prioritize indoor or covered activities (museums, indoor play places, building/craft centers, indoor railways). If Saturday is clear/mild, prioritize outdoor activities.
+    - **Sunday Weather Alignment**: Evaluate Sunday's specific forecast independently. If Sunday has rain/cold/high precipitation, all 5 Sunday itineraries MUST prioritize indoor activities. If Sunday is mild/clear, prioritize outdoor activities (hiking trails, farms, outdoor street fairs, parks).
+    
     **TIME & SCHEDULE RULES:**
     - Drive time: Max 90 minutes drive from Westfield, NJ.
     - Buffer time: Always add 30 mins after sports or swim lessons for changing/prep before driving or eating.
     - Meal times: Lunch ~12:30 PM, Dinner ~5:30 PM.
     - Return time: Home by ~5:00 PM for dinner, OR home by 8:00-9:00 PM if eating dinner out.
-    - Weather matching: If rain/cold is forecasted, prioritize indoor/covered activities. If clear/warm, prioritize outdoor activities.
     
     **FAMILY PREFERENCES:**
     - Kids' Interests: Hiking, biking, building, kids museums, play places, dog-friendly spots, rides, exploring new towns, trucks, farms, festivals, crafts, playgrounds.
@@ -109,16 +112,20 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
     - Restaurants: Secondary to the activity. Do NOT plan a day around a restaurant or go out of the way for one. Only include a restaurant if it is within a 30-minute drive of the activity or on the way home, and offers unique, healthy, farm-to-table, or brewery vibes. Otherwise omit.
     
     **DELIVERABLE FORMAT:**
-    Generate 5 distinct, detailed itinerary options for the weekend formatted cleanly in semantic HTML.
-    For each itinerary include:
-    1. Itinerary Title & Day (Saturday or Sunday)
+    Generate a total of 10 distinct, detailed itinerary options formatted cleanly in semantic HTML:
+    - **Section 1 (Saturday - {saturday_date})**: 5 distinct itinerary options specifically aligned to Saturday's weather forecast.
+    - **Section 2 (Sunday - {sunday_date})**: 5 distinct itinerary options specifically aligned to Sunday's weather forecast.
+    
+    For EACH of the 10 itinerary options, include:
+    1. Itinerary Title & Day (e.g., "Saturday Option 1: Title")
     2. Activity Name & Hyperlinked Website
     3. Cost of Activity
     4. Recommended Stay Duration
     5. Dog-Friendly Flag (🐶 Dog Friendly or 🚫 No Dogs Allowed)
-    6. Activity Highlights
-    7. Full Timeline (accounting for travel from Westfield, calendar events, 30-min buffers, and meal times)
-    8. Recommended Nearby Restaurant (Food type, recommended dishes, distance from activity) - ONLY if within 30 mins and worth going to.
+    6. Weather Alignment Note (Explicitly explain how this activity matches that day's weather forecast)
+    7. Activity Highlights
+    8. Full Timeline (accounting for travel from Westfield, calendar events, 30-min buffers, and meal times)
+    9. Recommended Nearby Restaurant (Food type, recommended dishes, distance from activity) - ONLY if within 30 mins and worth going to.
     
     Return ONLY valid HTML inside `<div>` tags with clean inline CSS suitable for an email digest. Do NOT wrap in markdown code blocks.
     """
@@ -142,7 +149,7 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
 
 def send_email(html_content):
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "🗓️ Your Westfield Weekend Family Concierge Digest"
+    msg["Subject"] = "🗓️ Your Westfield Weekend Family Concierge Digest (Weather-Aligned)"
     msg["From"] = GMAIL_USER
     msg["To"] = RECIPIENT_EMAIL
     msg["Reply-To"] = RECIPIENT_EMAIL
@@ -151,7 +158,7 @@ def send_email(html_content):
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5; max-width: 700px; margin: auto;">
         <h2>Westfield Weekend Family Concierge</h2>
-        <p>Here are your 5 custom-tailored weekend itineraries based on your Google Calendar, live weather, and family preferences.</p>
+        <p>Here are your 10 custom-tailored weekend itineraries (5 for Saturday and 5 for Sunday), each strictly aligned to that day's live weather forecast, Google Calendar commitments, and family preferences.</p>
         <p><i>💡 <b>Feedback Loop:</b> Reply directly to this email with what you picked, loved, or skipped to help refine future suggestions!</i></p>
         <hr style="border: 0; border-top: 1px solid #ccc;">
     """
