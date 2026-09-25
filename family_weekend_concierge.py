@@ -29,8 +29,13 @@ def get_weekend_dates():
     return saturday.date(), sunday.date()
 
 def fetch_weather_forecast(saturday_date, sunday_date):
-    """Fetches Westfield, NJ weekend weather via Open-Meteo API (10-day window)."""
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={WESTFIELD_LAT}&longitude={WESTFIELD_LON}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode&timezone=America%2FNew_York&forecast_days=10"
+    """Fetches Westfield, NJ weekend weather in Fahrenheit via Open-Meteo API."""
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={WESTFIELD_LAT}&longitude={WESTFIELD_LON}"
+        f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
+        f"&temperature_unit=fahrenheit&timezone=America%2FNew_York&forecast_days=10"
+    )
     try:
         res = requests.get(url).json()
         daily = res.get("daily", {})
@@ -76,7 +81,7 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events."
 
 def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
-    """Uses Gemini API with robust backoff retries and valid model fallbacks."""
+    """Uses Gemini API with robust retries for transient 503 server demand."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
@@ -118,25 +123,24 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
     Return ONLY valid HTML inside `<div>` tags with clean inline CSS suitable for an email digest. Do NOT wrap in markdown code blocks.
     """
     
-    # Valid active models in google.genai
-    models_to_try = ['gemini-3.8-flash', 'gemini-3.8-pro']
+    model_name = 'gemini-3.8-flash'
+    max_attempts = 5
     
-    for model_name in models_to_try:
-        for attempt in range(4):  # Up to 4 attempts per model with increasing delay
-            try:
-                print(f"Attempting generation with model: {model_name} (Attempt {attempt + 1})...")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
-                if response and response.text:
-                    return response.text.replace("```html", "").replace("```", "").strip()
-            except Exception as e:
-                wait_time = (attempt + 1) * 5
-                print(f"Warning: {model_name} returned error: {e}. Retrying in {wait_time}s...")
-                time.sleep(wait_time)
+    for attempt in range(max_attempts):
+        try:
+            print(f"Attempting generation with model: {model_name} (Attempt {attempt + 1}/{max_attempts})...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            if response and response.text:
+                return response.text.replace("```html", "").replace("```", "").strip()
+        except Exception as e:
+            wait_time = (attempt + 1) * 12  # Progressive 12s, 24s, 36s, 48s backoff
+            print(f"Warning: {model_name} returned error: {e}. Waiting {wait_time}s before retrying...")
+            time.sleep(wait_time)
                 
-    raise RuntimeError("All Gemini model generation attempts failed due to temporary high server demand.")
+    raise RuntimeError("Gemini API call failed after multiple retry attempts due to server capacity limits.")
 
 def send_email(html_content):
     msg = MIMEMultipart("alternative")
