@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import smtplib
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
@@ -42,7 +43,7 @@ def fetch_weather_forecast(saturday_date, sunday_date):
         sun_idx = dates.index(sun_str) if sun_str in dates else None
         
         sat_weather = f"High {daily['temperature_2m_max'][sat_idx]}°F, Low {daily['temperature_2m_min'][sat_idx]}°F, Precip: {daily['precipitation_sum'][sat_idx]}mm" if sat_idx is not None else "N/A"
-        sun_weather = f"High {daily['temperature_2m_min'][sun_idx]}°F, Low {daily['temperature_2m_min'][sun_idx]}°F, Precip: {daily['precipitation_sum'][sun_idx]}mm" if sun_idx is not None else "N/A"
+        sun_weather = f"High {daily['temperature_2m_max'][sun_idx]}°F, Low {daily['temperature_2m_min'][sun_idx]}°F, Precip: {daily['precipitation_sum'][sun_idx]}mm" if sun_idx is not None else "N/A"
         
         return f"Saturday ({sat_str}): {sat_weather}\nSunday ({sun_str}): {sun_weather}"
     except Exception as e:
@@ -75,7 +76,7 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events."
 
 def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
-    """Uses Gemini API via google.genai SDK to generate 5 tailored weekend itineraries."""
+    """Uses Gemini API with retry and model fallback ladder."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
@@ -117,18 +118,30 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
     Return ONLY valid HTML inside `<div>` tags with clean inline CSS suitable for an email digest. Do NOT wrap in markdown code blocks.
     """
     
-    response = client.models.generate_content(
-        model='gemini-3.8-flash',
-        contents=prompt,
-    )
-    return response.text.replace("```html", "").replace("```", "").strip()
+    # Model fallback hierarchy in case of temporary 503 high demand
+    models_to_try = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
+    
+    for model_name in models_to_try:
+        for attempt in range(2):
+            try:
+                print(f"Attempting generation with model: {model_name} (Attempt {attempt + 1})...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                return response.text.replace("```html", "").replace("```", "").strip()
+            except Exception as e:
+                print(f"Warning: {model_name} returned error: {e}")
+                time.sleep(3) # Short pause before retry/fallback
+                
+    raise RuntimeError("All Gemini model generation attempts failed due to temporary high server demand.")
 
 def send_email(html_content):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = "🗓️ Your Westfield Weekend Family Concierge Digest"
     msg["From"] = GMAIL_USER
     msg["To"] = RECIPIENT_EMAIL
-    msg["Reply-To"] = RECIPIENT_EMAIL  # Allows replying directly to send feedback
+    msg["Reply-To"] = RECIPIENT_EMAIL
     
     intro_html = """
     <html>
