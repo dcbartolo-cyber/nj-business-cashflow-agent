@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 import smtplib
@@ -81,7 +82,7 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events."
 
 def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
-    """Uses Gemini Chat API with progressive backoff to generate 5 Saturday & 5 Sunday weather-aligned itineraries."""
+    """Uses Gemini Chat API with dynamic 429 quota delay parsing."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
@@ -131,7 +132,7 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
     """
     
     model_name = 'gemini-3.8-flash'
-    max_attempts = 6
+    max_attempts = 5
     
     for attempt in range(max_attempts):
         try:
@@ -141,8 +142,15 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
             if response and response.text:
                 return response.text.replace("```html", "").replace("```", "").strip()
         except Exception as e:
-            wait_time = (attempt + 1) * 10
-            print(f"Warning: {model_name} returned error: {e}. Retrying in {wait_time}s...")
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                match = re.search(r'retry in (\d+\.?\d*)s', err_str, re.IGNORECASE) or re.search(r"'retryDelay': '(\d+)s'", err_str)
+                wait_time = (int(float(match.group(1))) + 3) if match else 60
+                print(f"Quota rate limit hit (429). Google requested wait of {wait_time}s. Pausing...")
+            else:
+                wait_time = (attempt + 1) * 15
+                print(f"Warning: {model_name} returned error: {e}. Retrying in {wait_time}s...")
+            
             time.sleep(wait_time)
                 
     raise RuntimeError("Gemini API call failed after multiple retry attempts due to server capacity limits.")
