@@ -1,0 +1,31 @@
+name: Weekly Family Weekend Concierge Agent
+
+on:
+  schedule:
+    # Runs at 11:00 UTC (7:00 AM EST) every Wednesday morning
+    - cron: '0 11 * * 3'
+  workflow_dispatch: # Allows manual trigger anytime
+
+jobs:
+  run-family-planner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python Dependencies
+        run: |
+          pip install requests icalendar google-generativeai
+
+      - name: Execute Family Concierge Agent
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GCAL_ICS_URL: ${{ secrets.GCAL_ICS_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python family_weekend_concierge.py
