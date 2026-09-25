@@ -91,24 +91,61 @@ def clean_html_response(raw_text):
 
 def generate_single_day_itineraries(client, day_name, target_date, weather_info, calendar_info):
     """Generates 5 tailored itineraries for a single day with extended backoff for server capacity spikes."""
-    prompt = f"""
-    You are an expert family activity concierge for a family based in Westfield, NJ (07090).
+    prompt = (
+        f"You are an expert family activity concierge for a family based in Westfield, NJ (07090).\n\n"
+        f"**DAY CONTEXT:**\n"
+        f"- Target Day: {day_name}, {target_date}\n"
+        f"- Weather Forecast: {weather_info}\n"
+        f"- Google Calendar Commitments:\n{calendar_info}\n\n"
+        f"**WEATHER ALIGNMENT RULES (STRICT):**\n"
+        f"- Evaluate this day's weather forecast ({weather_info}).\n"
+        f"- If rain, high precipitation (>5mm), cold (<50°F), or high winds: ALL 5 itineraries MUST prioritize indoor/covered activities (museums, indoor play places, building/craft centers, indoor railways).\n"
+        f"- If clear/mild/warm: Prioritize outdoor activities (hiking trails, parks, farms, outdoor fairs).\n\n"
+        f"**TIME & SCHEDULE RULES:**\n"
+        f"- Drive time: Max 90 minutes drive from Westfield, NJ.\n"
+        f"- Buffer time: Always add 30 mins after sports or swim lessons for changing/prep before driving or eating.\n"
+        f"- Meal times: Lunch ~12:30 PM, Dinner ~5:30 PM.\n"
+        f"- Return time: Home by ~5:00 PM for dinner, OR home by 8:00-9:00 PM if eating dinner out.\n\n"
+        f"**FAMILY PREFERENCES:**\n"
+        f"- Kids' Interests: Hiking, biking, building, kids museums, play places, dog-friendly spots, rides, exploring new towns, trucks, farms, festivals, crafts, playgrounds.\n"
+        f"- Parents' Preferences: Healthy options, farm-to-table, brewery, unique local spots.\n"
+        f"- Dog-Friendly: Explicitly flag whether the activity is 🐶 Dog Friendly or 🚫 No Dogs Allowed.\n"
+        f"- Restaurants: Secondary to the activity. Do NOT plan a day around a restaurant. Only include if within 30 mins of the activity or on the way home, offering unique/healthy/brewery vibes.\n\n"
+        f"**DELIVERABLE FORMAT:**\n"
+        f"Generate 5 distinct, detailed itinerary options formatted cleanly in semantic HTML inside <div> tags.\n"
+        f"For EACH of the 5 options include:\n"
+        f"1. Itinerary Title (e.g. '{day_name} Option 1: Title')\n"
+        f"2. Activity Name & Hyperlinked Website\n"
+        f"3. Cost of Activity\n"
+        f"4. Recommended Stay Duration\n"
+        f"5. Dog-Friendly Flag (🐶 Dog Friendly or 🚫 No Dogs Allowed)\n"
+        f"6. Weather Alignment Note (Explain how it matches {day_name}'s forecast)\n"
+        f"7. Activity Highlights\n"
+        f"8. Full Timeline (accounting for travel from Westfield, calendar events, 30-min buffers, and meal times)\n"
+        f"9. Recommended Nearby Restaurant (Food type, recommended dishes, distance) - ONLY if within 30 mins and worth going to.\n\n"
+        f"Return ONLY valid HTML inside <div> tags with clean inline CSS suitable for an email digest. Do NOT wrap in markdown code blocks."
+    )
     
-    **DAY CONTEXT:**
-    - Target Day: {day_name}, {target_date}
-    - Weather Forecast: {weather_info}
-    - Google Calendar Commitments:
-    {calendar_info}
+    model_name = 'gemini-3.8-flash'
+    max_attempts = 8
     
-    **WEATHER ALIGNMENT RULES (STRICT):**
-    - Evaluate this day's weather forecast ({weather_info}).
-    - If rain, high precipitation (>5mm), cold (<50°F), or high winds: ALL 5 itineraries MUST prioritize indoor/covered activities (museums, indoor play places, building/craft centers, indoor railways).
-    - If clear/mild/warm: Prioritize outdoor activities (hiking trails, parks, farms, outdoor fairs).
-    
-    **TIME & SCHEDULE RULES:**
-    - Drive time: Max 90 minutes drive from Westfield, NJ.
-    - Buffer time: Always add 30 mins after sports or swim lessons for changing/prep before driving or eating.
-    - Meal times: Lunch ~12:30 PM, Dinner ~5:30 PM.
-    - Return time: Home by ~5:00 PM for dinner, OR home by 8:00-9:00 PM if eating dinner out.
-    
-    **FAMILY PREFERENCES
+    for attempt in range(max_attempts):
+        try:
+            print(f"Generating itineraries for {day_name} ({target_date}) - Attempt {attempt + 1}/{max_attempts}...")
+            chat = client.chats.create(model=model_name)
+            response = chat.send_message(prompt)
+            if response and response.text:
+                return clean_html_response(response.text)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                match = re.search(r'retry in (\d+\.?\d*)s', err_str, re.IGNORECASE) or re.search(r"'retryDelay': '(\d+)s'", err_str)
+                wait_time = (int(float(match.group(1))) + 5) if match else 45
+                print(f"Quota rate limit hit (429). Google requested wait of {wait_time}s. Pausing...")
+            else:
+                wait_time = min((attempt + 1) * 15, 60)
+                print(f"Warning: {model_name} returned error: {e}. Retrying in {wait_time}s...")
+            
+            time.sleep(wait_time)
+            
+    raise RuntimeError(f"Failed to generate itineraries for
