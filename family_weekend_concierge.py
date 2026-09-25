@@ -148,4 +148,82 @@ def generate_single_day_itineraries(client, day_name, target_date, weather_info,
             
             time.sleep(wait_time)
             
-    raise RuntimeError(f"Failed to generate itineraries for
+    err_msg = f"Failed to generate itineraries for {day_name} after {max_attempts} attempts."
+    raise RuntimeError(err_msg)
+
+def generate_full_weekend_digest(sat_date, sun_date, sat_weather, sun_weather, sat_events, sun_events):
+    """Executes separate Saturday and Sunday requests with a pacing pause."""
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    
+    # 1. Generate Saturday Options
+    sat_html = generate_single_day_itineraries(client, "Saturday", sat_date, sat_weather, sat_events)
+    
+    # Pause 15 seconds to give server capacity time to cool down before Sunday
+    print("Saturday complete! Pausing 15 seconds before Sunday generation...")
+    time.sleep(15)
+    
+    # 2. Generate Sunday Options
+    sun_html = generate_single_day_itineraries(client, "Sunday", sun_date, sun_weather, sun_events)
+    
+    combined_html = f"""
+    <div style="margin-bottom: 30px;">
+        <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 5px;">🗓️ Saturday Options ({sat_date})</h2>
+        <p><b>Forecast:</b> {sat_weather}</p>
+        {sat_html}
+    </div>
+    <hr style="border: 0; border-top: 2px solid #eee; margin: 40px 0;">
+    <div style="margin-bottom: 30px;">
+        <h2 style="color: #2c3e50; border-bottom: 2px solid #2ecc71; padding-bottom: 5px;">🗓️ Sunday Options ({sun_date})</h2>
+        <p><b>Forecast:</b> {sun_weather}</p>
+        {sun_html}
+    </div>
+    """
+    return combined_html
+
+def send_email(html_content):
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "🗓️ Your Westfield Weekend Family Concierge Digest (Weather-Aligned)"
+    msg["From"] = GMAIL_USER
+    msg["To"] = RECIPIENT_EMAIL
+    msg["Reply-To"] = RECIPIENT_EMAIL
+    
+    plain_text_summary = "Your Westfield Weekend Family Concierge Digest is ready. Please view this email in an HTML-compatible email client to see your 10 custom itineraries."
+    intro_html = """
+    <html>
+    <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5; max-width: 700px; margin: auto;">
+        <h2>Westfield Weekend Family Concierge</h2>
+        <p>Here are your 10 custom-tailored weekend itineraries (5 for Saturday and 5 for Sunday), each strictly aligned to that day's live weather forecast, Google Calendar commitments, and family preferences.</p>
+        <p><i>💡 <b>Feedback Loop:</b> Reply directly to this email with what you picked, loved, or skipped to help refine future suggestions!</i></p>
+        <hr style="border: 0; border-top: 1px solid #ccc;">
+    """
+    
+    full_html = intro_html + html_content + "</body></html>"
+    
+    msg.attach(MIMEText(plain_text_summary, "plain"))
+    msg.attach(MIMEText(full_html, "html"))
+    
+    try:
+        print(f"Connecting to Gmail SMTP to deliver digest to {RECIPIENT_EMAIL}...")
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(GMAIL_USER, GMAIL_PASS)
+        server.sendmail(GMAIL_USER, RECIPIENT_EMAIL, msg.as_string())
+        server.quit()
+        print(f"SUCCESS: Weekend Concierge digest dispatched to {RECIPIENT_EMAIL}!")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    if not GMAIL_USER or not GMAIL_PASS or not GEMINI_API_KEY:
+        print("Error: Missing required secrets (GMAIL_USER, GMAIL_APP_PASSWORD, or GEMINI_API_KEY).")
+        sys.exit(1)
+        
+    sat_date, sun_date = get_weekend_dates()
+    sat_weather, sun_weather = fetch_weather_forecast(sat_date, sun_date)
+    sat_events, sun_events = fetch_calendar_events(sat_date, sun_date)
+    
+    print(f"Saturday Weather: {sat_weather}")
+    print(f"Sunday Weather: {sun_weather}\n")
+    
+    itineraries_html = generate_full_weekend_digest(sat_date, sun_date, sat_weather, sun_weather, sat_events, sun_events)
+    send_email(itineraries_html)
