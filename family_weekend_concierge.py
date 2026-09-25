@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import sys
 import time
@@ -85,104 +86,100 @@ def fetch_calendar_events(saturday_date, sunday_date):
         print(f"Calendar Fetch Error: {e}")
         return "Unable to parse calendar events.", "Unable to parse calendar events."
 
-def clean_html_response(raw_text):
-    """Safely strips markdown code blocks using regex."""
-    clean_text = re.sub(r"```(?:html)?", "", raw_text)
-    return clean_text.strip()
-
-def generate_single_day_itineraries(client, day_name, target_date, weather_info, calendar_info):
-    """Generates 5 tailored itineraries using low-temperature direct generation."""
-    prompt = (
-        f"You are a family concierge for a family in Westfield, NJ (07090).\n"
-        f"Date: {day_name}, {target_date}\n"
-        f"Weather: {weather_info}\n"
-        f"Calendar: {calendar_info}\n\n"
-        f"STRICT RULES:\n"
-        f"1. Drive time: Max 90 mins from Westfield, NJ.\n"
-        f"2. Weather alignment: If precip > 5mm or cold (<50F), MUST select indoor/covered activities. If clear/warm, select outdoor.\n"
-        f"3. Family: Kids like hiking, biking, building, museums, play places, trucks, farms, playgrounds. Parents like healthy, farm-to-table, brewery, local spots.\n"
-        f"4. Flag 🐶 Dog Friendly or 🚫 No Dogs Allowed.\n\n"
-        f"OUTPUT FORMAT:\n"
-        f"Provide 5 concise options in clean semantic HTML (using <div>, <h3>, <p>, <ul>, <li>).\n"
-        f"Keep text brief and compact to ensure fast response.\n"
-        f"For each option include:\n"
-        f"- Title & Website Link\n"
-        f"- Cost & Stay Duration\n"
-        f"- Dog Friendly Flag & Weather Alignment Note\n"
-        f"- Quick Highlights (bullet points)\n"
-        f"- Compact Timeline (Travel from Westfield, lunch ~12:30, home by ~5 PM or ~8 PM)\n"
-        f"- Nearby Restaurant (within 30 mins, optional)\n\n"
-        f"Return ONLY valid HTML inside <div> tags. Do NOT wrap in markdown code blocks."
-    )
-    
-    model_name = 'gemini-3.8-flash'
-    max_attempts = 5
-    
-    config = types.GenerateContentConfig(
-        temperature=0.3,
-        max_output_tokens=2500
-    )
-    
-    for attempt in range(max_attempts):
-        try:
-            print(f"Generating itineraries for {day_name} ({target_date}) - Attempt {attempt + 1}/{max_attempts}...")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=config
-            )
-            if response and response.text:
-                return clean_html_response(response.text)
-        except Exception as e:
-            err_str = str(e)
-            print(f"Warning attempt {attempt + 1}: {err_str}")
-            wait_time = 25 * (attempt + 1)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                match = re.search(r'retry in (\d+\.?\d*)s', err_str, re.IGNORECASE) or re.search(r"'retryDelay': '(\d+)s'", err_str)
-                wait_time = (int(float(match.group(1))) + 5) if match else 45
-                print(f"Quota rate limit hit (429). Pausing {wait_time}s...")
-            else:
-                print(f"Server capacity demand spike (503). Pausing {wait_time}s before retry...")
-            
-            time.sleep(wait_time)
-            
-    err_msg = f"Failed to generate itineraries for {day_name} after {max_attempts} attempts."
-    raise RuntimeError(err_msg)
-
-def generate_full_weekend_digest(sat_date, sun_date, sat_weather, sun_weather, sat_events, sun_events):
-    """Executes separate Saturday and Sunday requests with a pacing pause."""
+def fetch_itineraries_json(sat_date, sun_date, sat_weather, sun_weather, sat_events, sun_events):
+    """Generates structured JSON for both Saturday and Sunday in 1 fast API request."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
-    sat_html = generate_single_day_itineraries(client, "Saturday", sat_date, sat_weather, sat_events)
+    prompt = f"""
+    You are an expert family concierge for a family in Westfield, NJ (07090).
     
-    print("Saturday generation complete! Pausing 10 seconds before Sunday generation...")
-    time.sleep(10)
+    WEEKEND DETAILS:
+    - Saturday ({sat_date}): Weather={sat_weather} | Calendar={sat_events}
+    - Sunday ({sun_date}): Weather={sun_weather} | Calendar={sun_events}
     
-    sun_html = generate_single_day_itineraries(client, "Sunday", sun_date, sun_weather, sun_events)
+    RULES:
+    1. Max 90 mins drive from Westfield, NJ.
+    2. Weather Alignment: If precip > 5mm or cold (<50F), MUST pick indoor/covered activities. If clear/warm, pick outdoor.
+    3. Kids: Hiking, biking, building, museums, play places, trucks, farms, playgrounds. Parents: Healthy, farm-to-table, brewery, local.
+    4. Dog-Friendly: Flag "🐶 Dog Friendly" or "🚫 No Dogs Allowed".
     
-    combined_html = f"""
-    <div style="margin-bottom: 30px;">
-        <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 5px;">🗓️ Saturday Options ({sat_date})</h2>
-        <p><b>Forecast:</b> {sat_weather}</p>
-        {sat_html}
-    </div>
-    <hr style="border: 0; border-top: 2px solid #eee; margin: 40px 0;">
-    <div style="margin-bottom: 30px;">
-        <h2 style="color: #2c3e50; border-bottom: 2px solid #2ecc71; padding-bottom: 5px;">🗓️ Sunday Options ({sun_date})</h2>
-        <p><b>Forecast:</b> {sun_weather}</p>
-        {sun_html}
-    </div>
+    OUTPUT FORMAT:
+    Return ONLY a single valid JSON object structured as:
+    {{
+      "saturday": [
+        {{
+          "title": "Option Title",
+          "activity_name": "Activity Name",
+          "website": "https://...",
+          "cost": "Cost details",
+          "duration": "Stay duration",
+          "dog_friendly": "🐶 Dog Friendly",
+          "weather_note": "Why it fits Saturday weather",
+          "highlights": ["Highlight 1", "Highlight 2"],
+          "timeline": "Full schedule string",
+          "restaurant": "Nearby dining option or N/A"
+        }}
+      ],
+      "sunday": [ ... 5 options formatted same way ... ]
+    }}
     """
-    return combined_html
+    
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.2
+    )
+    
+    print("Sending single JSON generation request to Gemini...")
+    response = client.models.generate_content(
+        model='gemini-3.8-flash',
+        contents=prompt,
+        config=config
+    )
+    
+    if response and response.text:
+        return json.loads(response.text)
+    raise RuntimeError("Failed to receive JSON payload from Gemini API.")
+
+def build_email_html(data, sat_date, sun_date, sat_weather, sun_weather):
+    """Converts structured JSON directly into clean, responsive HTML locally in Python."""
+    
+    def render_day_block(day_name, day_date, weather_str, options):
+        html = f"""
+        <div style="margin-bottom: 30px;">
+            <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 5px;">🗓️ {day_name} Options ({day_date})</h2>
+            <p style="background: #f8f9fa; padding: 10px; border-radius: 5px;"><b>Forecast:</b> {weather_str}</p>
+        """
+        for idx, item in enumerate(options, 1):
+            web_link = f'<a href="{item.get("website", "#")}" target="_blank">{item.get("activity_name", "Website")}</a>'
+            highlights_list = "".join([f"<li>{h}</li>" for h in item.get("highlights", [])])
+            
+            html += f"""
+            <div style="background: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <h3 style="color: #2c3e50; margin-top: 0;">{idx}. {item.get('title', 'Option')}</h3>
+                <p><b>Activity:</b> {web_link} | <b>Cost:</b> {item.get('cost', 'N/A')} | <b>Stay:</b> {item.get('duration', 'N/A')}</p>
+                <p><b>Dog Status:</b> {item.get('dog_friendly', 'N/A')} | <i>{item.get('weather_note', '')}</i></p>
+                <p><b>Highlights:</b></p>
+                <ul>{highlights_list}</ul>
+                <p><b>Schedule Timeline:</b> {item.get('timeline', 'N/A')}</p>
+                <p><b>Recommended Nearby Dining:</b> {item.get('restaurant', 'N/A')}</p>
+            </div>
+            """
+        html += "</div>"
+        return html
+
+    sat_html = render_day_block("Saturday", sat_date, sat_weather, data.get("saturday", []))
+    sun_html = render_day_block("Sunday", sun_date, sun_weather, data.get("sunday", []))
+    
+    return f"{sat_html}<hr style='border:0; border-top:2px solid #ccc; margin:30px 0;'>{sun_html}"
 
 def send_email(html_content):
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = "🗓️ Your Westfield Weekend Family Concierge Digest (Weather-Aligned)"
+    msg["Subject"] = "🗓️ Your Westfield Weekend Family Concierge Digest"
     msg["From"] = GMAIL_USER
     msg["To"] = RECIPIENT_EMAIL
     msg["Reply-To"] = RECIPIENT_EMAIL
     
-    plain_text_summary = "Your Westfield Weekend Family Concierge Digest is ready. Please view in an HTML-compatible email client."
+    plain_text = "Your Westfield Weekend Concierge Digest is ready. Please view in an HTML-compatible email client."
     intro_html = """
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5; max-width: 700px; margin: auto;">
@@ -193,24 +190,19 @@ def send_email(html_content):
     """
     
     full_html = intro_html + html_content + "</body></html>"
-    
-    msg.attach(MIMEText(plain_text_summary, "plain"))
+    msg.attach(MIMEText(plain_text, "plain"))
     msg.attach(MIMEText(full_html, "html"))
     
-    try:
-        print(f"Connecting to Gmail SMTP to deliver digest to {RECIPIENT_EMAIL}...")
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.login(GMAIL_USER, GMAIL_PASS)
-        server.sendmail(GMAIL_USER, RECIPIENT_EMAIL, msg.as_string())
-        server.quit()
-        print(f"SUCCESS: Weekend Concierge digest dispatched to {RECIPIENT_EMAIL}!")
-    except Exception as e:
-        print(f"Error sending email: {e}")
-        sys.exit(1)
+    print(f"Connecting to Gmail SMTP to deliver digest to {RECIPIENT_EMAIL}...")
+    server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+    server.login(GMAIL_USER, GMAIL_PASS)
+    server.sendmail(GMAIL_USER, RECIPIENT_EMAIL, msg.as_string())
+    server.quit()
+    print(f"SUCCESS: Weekend Concierge digest dispatched to {RECIPIENT_EMAIL}!")
 
 if __name__ == "__main__":
     if not GMAIL_USER or not GMAIL_PASS or not GEMINI_API_KEY:
-        print("Error: Missing required secrets (GMAIL_USER, GMAIL_APP_PASSWORD, or GEMINI_API_KEY).")
+        print("Error: Missing required secrets.")
         sys.exit(1)
         
     sat_date, sun_date = get_weekend_dates()
@@ -220,5 +212,6 @@ if __name__ == "__main__":
     print(f"Saturday Weather: {sat_weather}")
     print(f"Sunday Weather: {sun_weather}\n")
     
-    itineraries_html = generate_full_weekend_digest(sat_date, sun_date, sat_weather, sun_weather, sat_events, sun_events)
-    send_email(itineraries_html)
+    itinerary_data = fetch_itineraries_json(sat_date, sun_date, sat_weather, sun_weather, sat_events, sun_events)
+    email_html = build_email_html(itinerary_data, sat_date, sun_date, sat_weather, sun_weather)
+    send_email(email_html)
