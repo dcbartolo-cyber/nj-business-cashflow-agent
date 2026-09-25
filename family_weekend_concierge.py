@@ -81,7 +81,7 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events."
 
 def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
-    """Uses Gemini Chat API to generate 5 tailored weekend itineraries without AFC capacity issues."""
+    """Uses Gemini Chat API with progressive backoff to generate 5 tailored weekend itineraries."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
@@ -123,22 +123,22 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
     Return ONLY valid HTML inside `<div>` tags with clean inline CSS suitable for an email digest. Do NOT wrap in markdown code blocks.
     """
     
-    models_to_try = ['gemini-3.8-flash', 'gemini-2.0-flash']
+    model_name = 'gemini-3.8-flash'
+    max_attempts = 6
     
-    for model_name in models_to_try:
-        for attempt in range(3):
-            try:
-                print(f"Attempting generation with Chat endpoint on model: {model_name} (Attempt {attempt + 1})...")
-                chat = client.chats.create(model=model_name)
-                response = chat.send_message(prompt)
-                if response and response.text:
-                    return response.text.replace("```html", "").replace("```", "").strip()
-            except Exception as e:
-                wait_time = (attempt + 1) * 5
-                print(f"Warning: {model_name} returned error: {e}. Retrying in {wait_time}s...")
-                time.sleep(wait_time)
+    for attempt in range(max_attempts):
+        try:
+            print(f"Attempting generation on model: {model_name} (Attempt {attempt + 1}/{max_attempts})...")
+            chat = client.chats.create(model=model_name)
+            response = chat.send_message(prompt)
+            if response and response.text:
+                return response.text.replace("```html", "").replace("```", "").strip()
+        except Exception as e:
+            wait_time = (attempt + 1) * 10
+            print(f"Warning: {model_name} returned error: {e}. Retrying in {wait_time}s...")
+            time.sleep(wait_time)
                 
-    raise RuntimeError("Gemini Chat API call failed after retries.")
+    raise RuntimeError("Gemini API call failed after multiple retry attempts due to server capacity limits.")
 
 def send_email(html_content):
     msg = MIMEMultipart("alternative")
