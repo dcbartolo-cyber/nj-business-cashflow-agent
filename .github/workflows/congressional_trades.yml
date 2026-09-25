@@ -1,0 +1,40 @@
+name: Congressional Stock Trade Monitor
+
+on:
+  schedule:
+    # Runs every 4 hours every day
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # Allows manual run anytime
+
+jobs:
+  monitor-trades:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to commit state tracking file back to repo
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Dependencies
+        run: |
+          pip install requests yfinance google-genai
+
+      - name: Execute Congressional Trade Monitor
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python congressional_trade_alert.py
+
+      - name: Commit State File Update (Prevent Duplicate Alerts)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add processed_trades.json || true
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: update processed congressional trades state [skip ci]" && git push)
