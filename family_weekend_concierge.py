@@ -6,7 +6,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import requests
 from icalendar import Calendar
-import google.generativeai as genai
+from google import genai
 
 # --- CONFIGURATION ---
 GMAIL_USER = os.getenv("GMAIL_USER")
@@ -75,9 +75,8 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events."
 
 def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
-    """Uses Gemini API to generate 5 tailored weekend itineraries."""
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    """Uses Gemini API via modern google.genai SDK to generate 5 tailored weekend itineraries."""
+    client = genai.Client(api_key=GEMINI_API_KEY)
     
     prompt = f"""
     You are an expert family activity concierge for a family based in Westfield, NJ (07090).
@@ -118,7 +117,10 @@ def generate_itineraries(weather, calendar_events, saturday_date, sunday_date):
     Return ONLY valid HTML inside `<div>` tags with clean inline CSS suitable for an email digest. Do NOT wrap in markdown code blocks.
     """
     
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+    )
     return response.text.replace("```html", "").replace("```", "").strip()
 
 def send_email(html_content):
