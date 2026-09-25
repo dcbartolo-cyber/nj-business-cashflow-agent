@@ -32,7 +32,7 @@ def get_weekend_dates():
 def fetch_weather_forecast(saturday_date, sunday_date):
     """Fetches Westfield, NJ weekend weather in Fahrenheit via Open-Meteo API."""
     url = (
-        f"https://api.open-meteo.com/v1/forecast?"
+        f"[https://api.open-meteo.com/v1/forecast](https://api.open-meteo.com/v1/forecast)?"
         f"latitude={WESTFIELD_LAT}&longitude={WESTFIELD_LON}"
         f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
         f"&temperature_unit=fahrenheit&timezone=America%2FNew_York&forecast_days=10"
@@ -83,6 +83,12 @@ def fetch_calendar_events(saturday_date, sunday_date):
     except Exception as e:
         print(f"Calendar Fetch Error: {e}")
         return "Unable to parse calendar events.", "Unable to parse calendar events."
+
+def clean_html_response(raw_text):
+    """Safely strips markdown code blocks from model response."""
+    text = raw_text.replace("```html", "")
+    text = text.replace("```", "")
+    return text.strip()
 
 def generate_single_day_itineraries(client, day_name, target_date, weather_info, calendar_info):
     """Generates 5 tailored itineraries for a single day to optimize API performance."""
@@ -137,4 +143,6 @@ def generate_single_day_itineraries(client, day_name, target_date, weather_info,
             chat = client.chats.create(model=model_name)
             response = chat.send_message(prompt)
             if response and response.text:
-                return response.text.replace("```html", "").replace("
+                return clean_html_response(response.text)
+        except Exception as e:
+            err_str = str
