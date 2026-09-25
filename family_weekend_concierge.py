@@ -9,6 +9,7 @@ from email.mime.text import MIMEText
 import requests
 from icalendar import Calendar
 from google import genai
+from google.genai import types
 
 # --- CONFIGURATION ---
 GMAIL_USER = os.getenv("GMAIL_USER")
@@ -38,7 +39,7 @@ def fetch_weather_forecast(saturday_date, sunday_date):
         f"&temperature_unit=fahrenheit&timezone=America%2FNew_York&forecast_days=10"
     )
     try:
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         daily = res.get("daily", {})
         dates = daily.get("time", [])
         
@@ -62,7 +63,7 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "No calendar URL provided.", "No calendar URL provided."
         
     try:
-        res = requests.get(GCAL_ICS_URL)
+        res = requests.get(GCAL_ICS_URL, timeout=10)
         cal = Calendar.from_ical(res.content)
         sat_events, sun_events = [], []
         
@@ -85,68 +86,63 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events.", "Unable to parse calendar events."
 
 def clean_html_response(raw_text):
-    """Safely strips markdown code blocks using regex to avoid quote line-wrapping bugs."""
+    """Safely strips markdown code blocks using regex."""
     clean_text = re.sub(r"```(?:html)?", "", raw_text)
     return clean_text.strip()
 
 def generate_single_day_itineraries(client, day_name, target_date, weather_info, calendar_info):
-    """Generates 5 tailored itineraries using direct generate_content for fast, reliable delivery."""
+    """Generates 5 tailored itineraries using low-temperature direct generation."""
     prompt = (
-        f"You are an expert family activity concierge for a family based in Westfield, NJ (07090).\n\n"
-        f"**DAY CONTEXT:**\n"
-        f"- Target Day: {day_name}, {target_date}\n"
-        f"- Weather Forecast: {weather_info}\n"
-        f"- Google Calendar Commitments:\n{calendar_info}\n\n"
-        f"**WEATHER ALIGNMENT RULES (STRICT):**\n"
-        f"- Evaluate weather forecast ({weather_info}).\n"
-        f"- If rain, high precipitation (>5mm), cold (<50°F), or high winds: ALL 5 itineraries MUST prioritize indoor/covered activities.\n"
-        f"- If clear/mild/warm: Prioritize outdoor activities.\n\n"
-        f"**TIME & SCHEDULE RULES:**\n"
-        f"- Drive time: Max 90 minutes drive from Westfield, NJ.\n"
-        f"- Buffer time: Always add 30 mins after sports or swim lessons.\n"
-        f"- Meal times: Lunch ~12:30 PM, Dinner ~5:30 PM.\n"
-        f"- Return time: Home by ~5:00 PM for dinner, OR home by 8:00-9:00 PM if eating dinner out.\n\n"
-        f"**FAMILY PREFERENCES:**\n"
-        f"- Kids: Hiking, biking, building, kids museums, play places, dog-friendly spots, rides, exploring new towns, trucks, farms, festivals, crafts, playgrounds.\n"
-        f"- Parents: Healthy options, farm-to-table, brewery, unique local spots.\n"
-        f"- Dog-Friendly: Explicitly flag 🐶 Dog Friendly or 🚫 No Dogs Allowed.\n"
-        f"- Restaurants: Secondary to activity. Only include if within 30 mins, offering unique/healthy/brewery vibes.\n\n"
-        f"**DELIVERABLE FORMAT:**\n"
-        f"Generate 5 distinct, compact itinerary options in clean semantic HTML inside <div> tags.\n"
-        f"Keep HTML lightweight and concise without redundant inline CSS or fluff.\n"
-        f"For EACH option include:\n"
-        f"1. Title (e.g. '{day_name} Option 1: Title')\n"
-        f"2. Activity Name & Hyperlinked Website\n"
-        f"3. Cost & Stay Duration\n"
-        f"4. Dog-Friendly Flag\n"
-        f"5. Weather Alignment Note\n"
-        f"6. Activity Highlights\n"
-        f"7. Full Timeline\n"
-        f"8. Nearby Restaurant (if within 30 mins)\n\n"
+        f"You are a family concierge for a family in Westfield, NJ (07090).\n"
+        f"Date: {day_name}, {target_date}\n"
+        f"Weather: {weather_info}\n"
+        f"Calendar: {calendar_info}\n\n"
+        f"STRICT RULES:\n"
+        f"1. Drive time: Max 90 mins from Westfield, NJ.\n"
+        f"2. Weather alignment: If precip > 5mm or cold (<50F), MUST select indoor/covered activities. If clear/warm, select outdoor.\n"
+        f"3. Family: Kids like hiking, biking, building, museums, play places, trucks, farms, playgrounds. Parents like healthy, farm-to-table, brewery, local spots.\n"
+        f"4. Flag 🐶 Dog Friendly or 🚫 No Dogs Allowed.\n\n"
+        f"OUTPUT FORMAT:\n"
+        f"Provide 5 concise options in clean semantic HTML (using <div>, <h3>, <p>, <ul>, <li>).\n"
+        f"Keep text brief and compact to ensure fast response.\n"
+        f"For each option include:\n"
+        f"- Title & Website Link\n"
+        f"- Cost & Stay Duration\n"
+        f"- Dog Friendly Flag & Weather Alignment Note\n"
+        f"- Quick Highlights (bullet points)\n"
+        f"- Compact Timeline (Travel from Westfield, lunch ~12:30, home by ~5 PM or ~8 PM)\n"
+        f"- Nearby Restaurant (within 30 mins, optional)\n\n"
         f"Return ONLY valid HTML inside <div> tags. Do NOT wrap in markdown code blocks."
     )
     
     model_name = 'gemini-3.8-flash'
-    max_attempts = 6
+    max_attempts = 5
+    
+    config = types.GenerateContentConfig(
+        temperature=0.3,
+        max_output_tokens=2500
+    )
     
     for attempt in range(max_attempts):
         try:
             print(f"Generating itineraries for {day_name} ({target_date}) - Attempt {attempt + 1}/{max_attempts}...")
             response = client.models.generate_content(
                 model=model_name,
-                contents=prompt
+                contents=prompt,
+                config=config
             )
             if response and response.text:
                 return clean_html_response(response.text)
         except Exception as e:
             err_str = str(e)
+            print(f"Warning attempt {attempt + 1}: {err_str}")
+            wait_time = 25 * (attempt + 1)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 match = re.search(r'retry in (\d+\.?\d*)s', err_str, re.IGNORECASE) or re.search(r"'retryDelay': '(\d+)s'", err_str)
-                wait_time = (int(float(match.group(1))) + 5) if match else 30
-                print(f"Quota rate limit hit (429). Waiting {wait_time}s...")
+                wait_time = (int(float(match.group(1))) + 5) if match else 45
+                print(f"Quota rate limit hit (429). Pausing {wait_time}s...")
             else:
-                wait_time = min((attempt + 1) * 10, 40)
-                print(f"Warning: {model_name} returned error: {e}. Retrying in {wait_time}s...")
+                print(f"Server capacity demand spike (503). Pausing {wait_time}s before retry...")
             
             time.sleep(wait_time)
             
@@ -157,14 +153,11 @@ def generate_full_weekend_digest(sat_date, sun_date, sat_weather, sun_weather, s
     """Executes separate Saturday and Sunday requests with a pacing pause."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
-    # 1. Generate Saturday Options
     sat_html = generate_single_day_itineraries(client, "Saturday", sat_date, sat_weather, sat_events)
     
-    # Pause 5 seconds to pace requests
-    print("Saturday complete! Pausing 5 seconds before Sunday generation...")
-    time.sleep(5)
+    print("Saturday generation complete! Pausing 10 seconds before Sunday generation...")
+    time.sleep(10)
     
-    # 2. Generate Sunday Options
     sun_html = generate_single_day_itineraries(client, "Sunday", sun_date, sun_weather, sun_events)
     
     combined_html = f"""
@@ -189,12 +182,12 @@ def send_email(html_content):
     msg["To"] = RECIPIENT_EMAIL
     msg["Reply-To"] = RECIPIENT_EMAIL
     
-    plain_text_summary = "Your Westfield Weekend Family Concierge Digest is ready. Please view this email in an HTML-compatible email client to see your 10 custom itineraries."
+    plain_text_summary = "Your Westfield Weekend Family Concierge Digest is ready. Please view in an HTML-compatible email client."
     intro_html = """
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.5; max-width: 700px; margin: auto;">
         <h2>Westfield Weekend Family Concierge</h2>
-        <p>Here are your 10 custom-tailored weekend itineraries (5 for Saturday and 5 for Sunday), each strictly aligned to that day's live weather forecast, Google Calendar commitments, and family preferences.</p>
+        <p>Here are your 10 custom-tailored weekend itineraries (5 for Saturday and 5 for Sunday), aligned to live weather and family preferences.</p>
         <p><i>💡 <b>Feedback Loop:</b> Reply directly to this email with what you picked, loved, or skipped to help refine future suggestions!</i></p>
         <hr style="border: 0; border-top: 1px solid #ccc;">
     """
