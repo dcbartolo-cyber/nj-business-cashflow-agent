@@ -87,58 +87,69 @@ def fetch_calendar_events(saturday_date, sunday_date):
         return "Unable to parse calendar events.", "Unable to parse calendar events."
 
 def fetch_itineraries_json(sat_date, sun_date, sat_weather, sun_weather, sat_events, sun_events):
-    """Generates structured JSON for both Saturday and Sunday in 1 fast API request."""
+    """Generates structured JSON for both Saturday and Sunday in 1 fast API request with retries."""
     client = genai.Client(api_key=GEMINI_API_KEY)
     
-    prompt = f"""
-    You are an expert family concierge for a family in Westfield, NJ (07090).
-    
-    WEEKEND DETAILS:
-    - Saturday ({sat_date}): Weather={sat_weather} | Calendar={sat_events}
-    - Sunday ({sun_date}): Weather={sun_weather} | Calendar={sun_events}
-    
-    RULES:
-    1. Max 90 mins drive from Westfield, NJ.
-    2. Weather Alignment: If precip > 5mm or cold (<50F), MUST pick indoor/covered activities. If clear/warm, pick outdoor.
-    3. Kids: Hiking, biking, building, museums, play places, trucks, farms, playgrounds. Parents: Healthy, farm-to-table, brewery, local.
-    4. Dog-Friendly: Flag "🐶 Dog Friendly" or "🚫 No Dogs Allowed".
-    
-    OUTPUT FORMAT:
-    Return ONLY a single valid JSON object structured as:
-    {{
-      "saturday": [
-        {{
-          "title": "Option Title",
-          "activity_name": "Activity Name",
-          "website": "https://...",
-          "cost": "Cost details",
-          "duration": "Stay duration",
-          "dog_friendly": "🐶 Dog Friendly",
-          "weather_note": "Why it fits Saturday weather",
-          "highlights": ["Highlight 1", "Highlight 2"],
-          "timeline": "Full schedule string",
-          "restaurant": "Nearby dining option or N/A"
-        }}
-      ],
-      "sunday": [ ... 5 options formatted same way ... ]
-    }}
-    """
+    prompt = (
+        f"You are an expert family concierge for a family in Westfield, NJ (07090).\n\n"
+        f"WEEKEND DETAILS:\n"
+        f"- Saturday ({sat_date}): Weather={sat_weather} | Calendar={sat_events}\n"
+        f"- Sunday ({sun_date}): Weather={sun_weather} | Calendar={sun_events}\n\n"
+        f"RULES:\n"
+        f"1. Max 90 mins drive from Westfield, NJ.\n"
+        f"2. Weather Alignment: If precip > 5mm or cold (<50F), MUST pick indoor/covered activities. If clear/warm, pick outdoor.\n"
+        f"3. Kids: Hiking, biking, building, museums, play places, trucks, farms, playgrounds. Parents: Healthy, farm-to-table, brewery, local.\n"
+        f"4. Dog-Friendly: Flag \"🐶 Dog Friendly\" or \"🚫 No Dogs Allowed\".\n\n"
+        f"OUTPUT FORMAT:\n"
+        f"Return ONLY a single valid JSON object structured as:\n"
+        f"{{\n"
+        f'  "saturday": [\n'
+        f'    {{\n'
+        f'      "title": "Option Title",\n'
+        f'      "activity_name": "Activity Name",\n'
+        f'      "website": "https://...",\n'
+        f'      "cost": "Cost details",\n'
+        f'      "duration": "Stay duration",\n'
+        f'      "dog_friendly": "🐶 Dog Friendly",\n'
+        f'      "weather_note": "Why it fits Saturday weather",\n'
+        f'      "highlights": ["Highlight 1", "Highlight 2"],\n'
+        f'      "timeline": "Full schedule string",\n'
+        f'      "restaurant": "Nearby dining option or N/A"\n'
+        f'    }}\n'
+        f'  ],\n'
+        f'  "sunday": [ ... 5 options formatted same way ... ]\n'
+        f"}}\n"
+    )
     
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         temperature=0.2
     )
     
-    print("Sending single JSON generation request to Gemini...")
-    response = client.models.generate_content(
-        model='gemini-3.8-flash',
-        contents=prompt,
-        config=config
-    )
-    
-    if response and response.text:
-        return json.loads(response.text)
-    raise RuntimeError("Failed to receive JSON payload from Gemini API.")
+    max_attempts = 6
+    for attempt in range(max_attempts):
+        try:
+            print(f"Sending single JSON generation request to Gemini (Attempt {attempt + 1}/{max_attempts})...")
+            chat = client.chats.create(model='gemini-3.8-flash')
+            response = chat.send_message(prompt, config=config)
+            
+            if response and response.text:
+                return json.loads(response.text)
+        except Exception as e:
+            err_str = str(e)
+            print(f"Warning attempt {attempt + 1}: {err_str}")
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                match = re.search(r'retry in (\d+\.?\d*)s', err_str, re.IGNORECASE) or re.search(r"'retryDelay': '(\d+)s'", err_str)
+                wait_time = (int(float(match.group(1))) + 5) if match else 45
+                print(f"Quota rate limit hit (429). Pausing {wait_time}s...")
+            else:
+                wait_time = (attempt + 1) * 15
+                print(f"Server capacity demand spike (503). Pausing {wait_time}s before retry...")
+            
+            time.sleep(wait_time)
+            
+    err_msg = "Failed to receive JSON payload from Gemini API after multiple retry attempts."
+    raise RuntimeError(err_msg)
 
 def build_email_html(data, sat_date, sun_date, sat_weather, sun_weather):
     """Converts structured JSON directly into clean, responsive HTML locally in Python."""
